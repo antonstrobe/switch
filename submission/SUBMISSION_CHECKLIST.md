@@ -28,8 +28,8 @@ Deadline: 18 May 2026, 23:59 UTC.
 
 ## Before Submission
 
-- Make the GitHub repository public.
-- Replace or remove outdated private release binaries.
+- Confirm the GitHub repository is public.
+- Replace or remove outdated release binaries.
 - Attach demo files or a public demo link.
 - Add a cover image to Kaggle media gallery.
 - Confirm the report links to the public repository and demo.

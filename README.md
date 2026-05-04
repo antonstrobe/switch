@@ -93,7 +93,7 @@ $env:SWITCH_GEMMA_MODEL_ID="google/gemma-4-E2B-it"
 .\build_exe.ps1
 ```
 
-Готовый `SwitchVisionMonitor.exe` не коммитится в Git из-за размера; для передачи демо-сборки используйте GitHub Release внутри приватного репозитория.
+Готовый `SwitchVisionMonitor.exe` не коммитится в Git из-за размера; для передачи демо-сборки используйте GitHub Release или Kaggle demo files.
 
 ## Проверка
 
