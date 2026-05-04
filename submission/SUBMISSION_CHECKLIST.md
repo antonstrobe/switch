@@ -8,7 +8,7 @@ Deadline: 18 May 2026, 23:59 UTC.
 - Public YouTube video: max 3 minutes, no login required.
 - Public code repository: GitHub or Kaggle Notebook, no login or paid access.
 - Public live demo URL or downloadable demo files.
-- Media gallery cover image.
+- Media gallery cover image: `header.png`.
 
 ## Project Positioning
 

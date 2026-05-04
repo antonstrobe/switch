@@ -1,5 +1,7 @@
 # Switch Vision Monitor
 
+![Switch Vision Monitor cover](header.png)
+
 Локальное Windows-приложение для анализа камеры, области экрана или полного экрана через официальную модель Google Gemma. Проект подготовлен под Gemma 4 Good Hackathon: по умолчанию используются конкурсные файлы Kaggle `gemma-4-good-hackathon` и модель `google/gemma-4-E2B-it`.
 
 ## Ключевые возможности
