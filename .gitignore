@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+app_config.json
+
+# Runtime data
+output/
+models/*
+!models/
+!models/README.md
+bin/
+
+# Build artifacts
+build/
+dist/
+*.spec
+SwitchVisionMonitor.exe
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

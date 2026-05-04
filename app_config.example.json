@@ -1,0 +1,16 @@
+{
+  "app_mode": "classifier",
+  "runtime": "local-gemma",
+  "model": "Gemma 4 E2B IT Q4_K_M (local GGUF)",
+  "source_mode": "camera",
+  "gpu_mode": "max",
+  "camera_index": "0",
+  "interval_seconds": "6",
+  "vision_capture_interval_seconds": "2",
+  "vision_memory_ttl_seconds": "86400",
+  "current_room_label": "",
+  "current_geo_label": "",
+  "reminder_command": "",
+  "emergency_command": "",
+  "prompt": "Опиши текущий кадр максимально подробно на русском языке. Укажи объекты, людей, руки, жесты, текст, цвета, освещение, фон, расположение деталей и возможные риски. Если что-то видно неуверенно, прямо напиши, что это предположение. Не выдумывай то, чего нет на изображении."
+}
