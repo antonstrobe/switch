@@ -374,8 +374,8 @@ class SwitchDesktopApp:
         return menu
 
     def refresh_models(self) -> None:
-        models_by_runtime = {"auto": [], "local-gemma": [], "lmstudio": [], "ollama": []}
-        for model in self.registry.get("local-gemma").detect_models():
+        models_by_runtime = {"auto": [], "official-gemma": []}
+        for model in self.registry.get("official-gemma").detect_models():
             models_by_runtime.setdefault(model.runtime, []).append(model)
         self.models_by_runtime = models_by_runtime
 
@@ -458,7 +458,7 @@ class SwitchDesktopApp:
     def clear_model_memory(self) -> None:
         if self.monitor is not None:
             self.stop_monitoring(unload_runtime=True)
-        for runtime_name in ("local-gemma", "lmstudio", "ollama"):
+        for runtime_name in ("official-gemma",):
             try:
                 runtime = self.registry.get(runtime_name)
             except Exception:
@@ -750,7 +750,7 @@ class SwitchDesktopApp:
 
         if runtime_name == "auto":
             errors: list[str] = []
-            for candidate_runtime in ("local-gemma", "lmstudio", "ollama"):
+            for candidate_runtime in ("official-gemma",):
                 models = self.models_by_runtime.get(candidate_runtime, [])
                 if not models:
                     continue
@@ -796,7 +796,7 @@ class SwitchDesktopApp:
     def _preferred_model(self, models: list[RuntimeModel]) -> RuntimeModel:
         def score(model: RuntimeModel) -> tuple[int, str]:
             text = f"{model.model_id} {model.display_name}".lower()
-            if model.runtime == "local-gemma":
+            if model.runtime == "official-gemma":
                 return (0, text)
             if "e2b" in text:
                 return (1, text)

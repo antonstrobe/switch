@@ -1,15 +1,16 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import requests
+from PIL import Image
 
-from switch_monitor.local_gemma import LOCAL_GEMMA_MODEL_ID, get_local_gemma_assets
 from switch_monitor.runtimes import (
     LMStudioRuntime,
-    LocalGemmaRuntime,
+    OFFICIAL_GEMMA_MODEL_ID,
     OLLAMA_MAX_GPU_LAYERS,
+    OfficialGemmaRuntime,
     OllamaRuntime,
     RuntimeErrorBase,
     RuntimeRegistry,
@@ -66,13 +67,13 @@ class RuntimeGpuTests(unittest.TestCase):
     def test_lmstudio_prefers_cuda_runtime(self) -> None:
         runtime = LMStudioRuntime()
         lines = [
-            "llama.cpp-win-x86_64-avx2@2.13.0                   GGUF",
-            "llama.cpp-win-x86_64-vulkan-avx2@2.10.0             GGUF",
-            "llama.cpp-win-x86_64-nvidia-cuda-avx2@2.10.0        GGUF",
+            "runtime-win-x86_64-avx2@2.13.0",
+            "runtime-win-x86_64-vulkan-avx2@2.10.0",
+            "runtime-win-x86_64-nvidia-cuda-avx2@2.10.0",
         ]
         self.assertEqual(
             runtime._find_gpu_runtime_alias(lines),
-            "llama.cpp-win-x86_64-nvidia-cuda-avx2@2.10.0",
+            "runtime-win-x86_64-nvidia-cuda-avx2@2.10.0",
         )
 
     def test_lmstudio_prepare_selects_gpu_runtime(self) -> None:
@@ -87,100 +88,49 @@ class RuntimeGpuTests(unittest.TestCase):
 
         select_gpu_runtime.assert_called_once()
 
-    def test_registry_includes_local_gemma(self) -> None:
+    def test_registry_includes_official_gemma(self) -> None:
         registry = RuntimeRegistry()
-        self.assertIsInstance(registry.get("local-gemma"), LocalGemmaRuntime)
+        self.assertIsInstance(registry.get("official-gemma"), OfficialGemmaRuntime)
 
-    def test_local_gemma_detects_downloadable_model(self) -> None:
+    def test_official_gemma_detects_google_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            runtime = LocalGemmaRuntime(Path(temp_dir))
+            runtime = OfficialGemmaRuntime(Path(temp_dir))
             models = runtime.detect_models()
 
-        self.assertEqual(models[0].runtime, "local-gemma")
-        self.assertEqual(models[0].model_id, LOCAL_GEMMA_MODEL_ID)
+        self.assertEqual(models[0].runtime, "official-gemma")
+        self.assertEqual(models[0].model_id, OFFICIAL_GEMMA_MODEL_ID)
 
-    def test_local_gemma_assets_use_project_models_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            assets = get_local_gemma_assets(Path(temp_dir))
+    def test_official_gemma_rejects_non_google_model(self) -> None:
+        runtime = OfficialGemmaRuntime()
+        runtime.model_id = "community/gemma"
 
-        self.assertIn("models", assets.model_path.parts)
-        self.assertFalse(assets.installed)
+        with self.assertRaises(RuntimeErrorBase):
+            runtime.prepare("community/gemma")
 
-    def test_local_gemma_server_disables_reasoning(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            runtime = LocalGemmaRuntime(Path(temp_dir))
-            runtime.model_path = Path(temp_dir) / "model.gguf"
-            runtime.mmproj_path = Path(temp_dir) / "mmproj.gguf"
-            runtime.server_exe = Path(temp_dir) / "llama-server.exe"
-            progress: list[str] = []
-            runtime.set_progress_callback(progress.append)
+    def test_official_gemma_extracts_pipeline_message(self) -> None:
+        runtime = OfficialGemmaRuntime()
+        result = [
+            {
+                "generated_text": [
+                    {"role": "user", "content": "prompt"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "{\"ok\": true}"}]},
+                ]
+            }
+        ]
 
-            with (
-                patch("switch_monitor.runtimes.subprocess.Popen") as popen,
-                patch("switch_monitor.runtimes.get_nvidia_gpu_status", return_value="GPU"),
-                patch.object(runtime, "_find_free_port", return_value=12345),
-                patch.object(runtime, "_wait_for_server"),
-            ):
-                runtime._start_server()
-                runtime.stop()
+        self.assertEqual(runtime._extract_generated_text(result), "{\"ok\": true}")
 
-        command = popen.call_args.args[0]
-        self.assertIn("--reasoning", command)
-        self.assertIn("off", command)
-        self.assertIn("--reasoning-budget", command)
-        self.assertIn("0", command)
-        self.assertTrue(any("Gemma загружена" in item for item in progress))
+    def test_official_gemma_analyze_uses_pipeline(self) -> None:
+        image = Image.new("RGB", (8, 8), "white")
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        runtime = OfficialGemmaRuntime()
+        runtime.pipeline = lambda *args, **kwargs: [{"generated_text": "{\"answer\": \"ok\"}"}]
 
-    def test_local_gemma_vulkan_uses_nvidia_icd_and_gpu_layers(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            runtime = LocalGemmaRuntime(Path(temp_dir))
-            runtime.model_path = Path(temp_dir) / "model.gguf"
-            runtime.mmproj_path = Path(temp_dir) / "mmproj.gguf"
-            runtime.server_exe = Path(temp_dir) / "llama.cpp-b8902-vulkan-x64" / "llama-server.exe"
-            runtime.gpu_layers = 15
-
-            with (
-                patch("switch_monitor.runtimes.subprocess.Popen") as popen,
-                patch("switch_monitor.runtimes.get_nvidia_gpu_status", return_value="GPU"),
-                patch("switch_monitor.runtimes.find_nvidia_vulkan_icd", return_value=r"C:\nvidia\nv-vk64.json"),
-                patch.object(runtime, "_find_free_port", return_value=12345),
-                patch.object(runtime, "_wait_for_server"),
-            ):
-                runtime._start_server()
-                runtime.stop()
-
-        command = popen.call_args.args[0]
-        environment = popen.call_args.kwargs["env"]
-        self.assertIn("--n-gpu-layers", command)
-        self.assertIn("15", command)
-        self.assertIn("-fit", command)
-        self.assertIn("off", command)
-        self.assertEqual(environment["VK_ICD_FILENAMES"], r"C:\nvidia\nv-vk64.json")
-        self.assertEqual(environment["GGML_VK_VISIBLE_DEVICES"], "0")
-
-    def test_local_gemma_low_vram_uses_safer_gpu_layers(self) -> None:
-        runtime = LocalGemmaRuntime()
-        with patch("switch_monitor.runtimes.get_nvidia_total_memory_mib", return_value=4096):
-            self.assertLessEqual(runtime._gpu_layers_for_mode("max"), 8)
-            self.assertLessEqual(runtime._context_size_for_hardware(), 4096)
-
-    def test_local_gemma_cancel_does_not_restart_server(self) -> None:
-        runtime = LocalGemmaRuntime()
-        runtime.server_url = "http://127.0.0.1:1"
-
-        def fail_after_cancel(*args, **kwargs):
-            runtime.stop()
-            raise requests.ConnectionError("cancelled")
-
-        with (
-            patch("switch_monitor.runtimes.requests.post", side_effect=fail_after_cancel) as post,
-            patch.object(runtime, "_ensure_server") as ensure_server,
-        ):
-            with self.assertRaises(RuntimeErrorBase):
-                runtime._post_chat_completion({}, 1)
-
-        self.assertEqual(post.call_count, 1)
-        ensure_server.assert_not_called()
+        self.assertEqual(
+            runtime.analyze(OFFICIAL_GEMMA_MODEL_ID, "system", "user", buffer.getvalue()),
+            "{\"answer\": \"ok\"}",
+        )
 
 
 if __name__ == "__main__":

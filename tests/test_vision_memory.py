@@ -36,7 +36,7 @@ class InvalidJsonRuntime(BaseRuntime):
 
 
 class CancelledGemmaRuntime(BaseRuntime):
-    name = "local-gemma"
+    name = "official-gemma"
 
     def detect_models(self):
         return []
@@ -395,9 +395,9 @@ class VisionMemoryTests(unittest.TestCase):
             )
             monitor.memory_store = store
             monitor.config = MonitorConfig(
-                runtime_name="local-gemma",
-                model_id="local-gemma",
-                prepared_model_id="local-gemma",
+                runtime_name="official-gemma",
+                model_id="official-gemma",
+                prepared_model_id="official-gemma",
                 camera_index=0,
                 interval_seconds=1,
                 prompt="",
@@ -416,7 +416,7 @@ class VisionMemoryTests(unittest.TestCase):
         obs = fallback_observation_from_text(
             '{"comment":"Телефон лежит на столе","tags":{"телефон":',
             "camera",
-            "local-gemma",
+            "official-gemma",
             error="truncated",
         )
 

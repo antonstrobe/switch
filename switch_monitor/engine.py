@@ -740,7 +740,7 @@ class CameraMonitor:
                     image_hash=image_hash,
                 )
             except Exception as parse_error:
-                if self.config.runtime_name == "local-gemma":
+                if self.config.runtime_name == "official-gemma":
                     stage("ответ модели невалидный, сохраняю частичный индекс без повторного запроса")
                     self.memory_store.increment_stat("errors")
                     observation = fallback_observation_from_text(

@@ -13,16 +13,12 @@ from typing import Callable
 
 import requests
 
-from .local_gemma import (
-    LOCAL_GEMMA_DISPLAY_NAME,
-    LOCAL_GEMMA_MODEL_ID,
-    ensure_llama_cpp_server,
-    ensure_local_gemma_assets,
-    get_local_gemma_assets,
-)
+from .competition_assets import download_competition_files
 
 
 DEFAULT_TIMEOUT = 600
+OFFICIAL_GEMMA_MODEL_ID = "google/gemma-4-E2B-it"
+OFFICIAL_GEMMA_DISPLAY_NAME = "Google Gemma 4 E2B IT (official)"
 LOCAL_GEMMA_MAX_TOKENS = int(os.environ.get("SWITCH_GEMMA_MAX_TOKENS", "1024"))
 LOCAL_GEMMA_CONTEXT_SIZE = int(os.environ.get("SWITCH_GEMMA_CTX_SIZE", "4096"))
 LOCAL_GEMMA_SAFE_GPU_LAYERS = int(os.environ.get("SWITCH_GEMMA_GPU_LAYERS", "15"))
@@ -174,64 +170,63 @@ class BaseRuntime:
         raise NotImplementedError
 
 
-class LocalGemmaRuntime(BaseRuntime):
-    name = "local-gemma"
+class OfficialGemmaRuntime(BaseRuntime):
+    name = "official-gemma"
 
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = project_root or Path.cwd()
-        self.gpu_mode = DEFAULT_GPU_MODE
-        self.model_path: Path | None = None
-        self.mmproj_path: Path | None = None
-        self.server_exe: Path | None = None
-        self.server_url: str | None = None
-        self.gpu_layers = LOCAL_GEMMA_SAFE_GPU_LAYERS
-        self.context_size = LOCAL_GEMMA_CONTEXT_SIZE
-        self._process: subprocess.Popen | None = None
-        self._log_file = None
-        self._loaded_key: tuple[str, str, str] | None = None
-        self._server_lock = threading.Lock()
-        self._cancel_requested = False
+        self.model_id = os.environ.get("SWITCH_GEMMA_MODEL_ID", OFFICIAL_GEMMA_MODEL_ID).strip()
+        self.pipeline = None
+        self.competition_files_path: Path | None = None
         self.progress_callback: Callable[[str], None] | None = None
-        atexit.register(self.stop)
 
     def detect_models(self) -> list[RuntimeModel]:
-        assets = get_local_gemma_assets(self.project_root)
-        state = "installed" if assets.installed else f"will download to {assets.model_dir}"
         return [
             RuntimeModel(
                 self.name,
-                LOCAL_GEMMA_MODEL_ID,
-                LOCAL_GEMMA_DISPLAY_NAME,
-                f"Local llama.cpp runtime, {state}",
+                self.model_id,
+                OFFICIAL_GEMMA_DISPLAY_NAME,
+                "Official Google Hugging Face model loaded with Transformers",
             )
         ]
 
     def prepare(self, model_id: str, gpu_mode: str = DEFAULT_GPU_MODE) -> str:
-        if model_id != LOCAL_GEMMA_MODEL_ID:
-            raise RuntimeErrorBase(f"Unknown local Gemma model: {model_id}")
-        self._cancel_requested = False
-        started_at = time.time()
-        self.gpu_mode = normalize_gpu_mode(gpu_mode)
-        self.context_size = self._context_size_for_hardware()
-        self.gpu_layers = self._gpu_layers_for_mode(self.gpu_mode)
-        self._emit_progress(
-            f"Проверяю локальную Gemma: {model_id}, GPU mode={self.gpu_mode}, GPU layers={self.gpu_layers}"
-        )
+        if model_id != self.model_id:
+            raise RuntimeErrorBase(f"Unknown official Gemma model: {model_id}")
+        if not model_id.startswith("google/"):
+            raise RuntimeErrorBase("Only official Google model repositories are allowed. Use google/gemma-4-E2B-it.")
+        if self.pipeline is not None:
+            return model_id
+        self._emit_progress("Downloading Kaggle competition files: gemma-4-good-hackathon")
         try:
-            assets = ensure_local_gemma_assets(self.project_root)
-            self.server_exe = ensure_llama_cpp_server(self.project_root)
+            self.competition_files_path = download_competition_files()
         except Exception as error:
-            raise RuntimeErrorBase(f"Local Gemma setup failed: {error}") from error
-        self.model_path = assets.model_path
-        self.mmproj_path = assets.mmproj_path
-        self._emit_progress(
-            f"Файлы модели найдены: {assets.model_file} ({format_file_size(assets.model_path)}), "
-            f"mmproj ({format_file_size(assets.mmproj_path)})"
-        )
-        self._emit_progress(f"llama.cpp runtime: {self.server_exe.name}")
-        self._ensure_server()
-        self._emit_progress(f"Локальная Gemma готова за {format_seconds(time.time() - started_at)}")
-        return f"{LOCAL_GEMMA_MODEL_ID}:{assets.model_file}"
+            raise RuntimeErrorBase(f"Kaggle competition files could not be downloaded: {error}") from error
+        self._emit_progress(f"Kaggle competition files: {self.competition_files_path}")
+        self._emit_progress(f"Loading official Google model: {model_id}")
+        try:
+            from transformers import pipeline
+        except ImportError as error:
+            raise RuntimeErrorBase(
+                "Transformers is not installed. Run: python -m pip install -r requirements.txt"
+            ) from error
+        try:
+            self.pipeline = pipeline(
+                "image-text-to-text",
+                model=model_id,
+                device_map="auto",
+                torch_dtype="auto",
+            )
+        except TypeError:
+            self.pipeline = pipeline(
+                "image-text-to-text",
+                model=model_id,
+                device_map="auto",
+            )
+        except Exception as error:
+            raise RuntimeErrorBase(f"Official Gemma setup failed: {error}") from error
+        self._emit_progress("Official Google Gemma is ready")
+        return model_id
 
     def analyze(
         self,
@@ -241,261 +236,35 @@ class LocalGemmaRuntime(BaseRuntime):
         image_bytes: bytes,
         timeout=None,
     ) -> str:
-        import base64
+        if self.pipeline is None:
+            self.prepare(prepared_model_id)
+        assert self.pipeline is not None
+        from io import BytesIO
 
-        self._cancel_requested = False
-        self._ensure_server()
-        assert self.server_url is not None
-        data_url = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('ascii')}"
-        payload = {
-            "model": "local-gemma",
-            "temperature": 0.1,
-            "max_tokens": LOCAL_GEMMA_MAX_TOKENS,
-            "stream": False,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ],
-        }
-        response = self._post_chat_completion(payload, timeout or DEFAULT_TIMEOUT)
-        return self._extract_message_content(response.json())
+        from PIL import Image
 
-    def _post_chat_completion(self, payload: dict, timeout: int | float):
-        assert self.server_url is not None
-        last_error: Exception | None = None
-        for attempt in range(2):
-            request_started_at = time.time()
-            attempt_label = "повторный запрос" if attempt else "запрос"
-            self._emit_progress(
-                f"Gemma: {attempt_label} отправлен на {self.server_url}, timeout {format_seconds(timeout)}"
-            )
-            try:
-                response = requests.post(
-                    f"{self.server_url}/v1/chat/completions",
-                    json=payload,
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                self._emit_progress(
-                    f"Gemma: ответ получен за {format_seconds(time.time() - request_started_at)}"
-                )
-                return response
-            except Exception as error:
-                last_error = error
-                if self._cancel_requested:
-                    raise RuntimeErrorBase("Local Gemma inference cancelled.") from last_error
-                if attempt == 0:
-                    self._emit_progress(f"Gemma: ошибка запроса, перезапускаю runtime: {error}")
-                    self._stop_process(mark_cancel=False)
-                    self._ensure_server()
-                    continue
-                raise RuntimeErrorBase(f"Local Gemma inference failed: {last_error}") from last_error
-        raise RuntimeErrorBase(f"Local Gemma inference failed: {last_error}")
-
-    def stop(self) -> None:
-        self._stop_process(mark_cancel=True)
-
-    def _stop_process(self, mark_cancel: bool = False) -> None:
-        if mark_cancel:
-            self._cancel_requested = True
-        process = self._process
-        if process is None:
-            return
-        if process.poll() is None:
-            self._emit_progress("Останавливаю локальный llama.cpp server")
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        self._process = None
-        self.server_url = None
-        self._loaded_key = None
-        if self._log_file is not None:
-            try:
-                self._log_file.close()
-            except Exception:
-                pass
-            self._log_file = None
-
-    def _ensure_server(self) -> None:
-        if self.model_path is None or self.mmproj_path is None:
-            self._emit_progress("Проверяю файлы локальной Gemma")
-            assets = ensure_local_gemma_assets(self.project_root)
-            self.model_path = assets.model_path
-            self.mmproj_path = assets.mmproj_path
-        if self.server_exe is None:
-            self._emit_progress("Проверяю llama.cpp server")
-            self.server_exe = ensure_llama_cpp_server(self.project_root)
-
-        key = (str(self.model_path), str(self.mmproj_path), self.gpu_mode)
-        if self._process is not None and self._process.poll() is None and self._loaded_key == key:
-            self._emit_progress("Локальная Gemma уже загружена, server готов")
-            return
-
-        with self._server_lock:
-            if self._process is not None and self._process.poll() is None and self._loaded_key == key:
-                self._emit_progress("Локальная Gemma уже загружена, server готов")
-                return
-            self._stop_process(mark_cancel=False)
-            self._start_server()
-            self._loaded_key = key
-
-    def _start_server(self) -> None:
-        assert self.model_path is not None
-        assert self.mmproj_path is not None
-        assert self.server_exe is not None
-        started_at = time.time()
-        port = self._find_free_port()
-        self.server_url = f"http://127.0.0.1:{port}"
-        self._emit_progress(self.describe_hardware())
-        self._emit_progress(
-            f"Запускаю llama.cpp server на {self.server_url}; загружаю Gemma в память"
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        prompt = (
+            f"{system_prompt}\n\n{user_prompt}\n\n"
+            "Return only valid JSON. Do not add Markdown fences or commentary."
         )
-        log_dir = self.project_root / "output"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        self._log_file = (log_dir / "llama_server.log").open("a", encoding="utf-8")
-        command = [
-            str(self.server_exe),
-            "-m",
-            str(self.model_path),
-            "--mmproj",
-            str(self.mmproj_path),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--ctx-size",
-            str(self.context_size),
-            "--jinja",
-            "--reasoning",
-            "off",
-            "--reasoning-budget",
-            "0",
-            "--log-disable",
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
         ]
-        if self._uses_gpu_runtime() and self.gpu_layers > 0:
-            command.extend(["--n-gpu-layers", str(self.gpu_layers), "-fit", "off"])
-        environment = self._subprocess_environment()
-        self._process = subprocess.Popen(
-            command,
-            cwd=str(self.server_exe.parent),
-            stdout=self._log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=subprocess_creationflags(),
-            env=environment,
-        )
         try:
-            self._wait_for_server()
-            self._emit_progress(
-                f"Gemma загружена, server готов за {format_seconds(time.time() - started_at)}; "
-                f"{get_nvidia_gpu_status()}"
-            )
-        except Exception:
-            self._stop_process(mark_cancel=False)
-            raise
-
-    def _wait_for_server(self) -> None:
-        assert self.server_url is not None
-        assert self._process is not None
-        last_error = ""
-        for _ in range(180):
-            if self._process.poll() is not None:
-                raise RuntimeErrorBase(f"Local llama.cpp server exited early with code {self._process.returncode}")
-            try:
-                response = requests.get(f"{self.server_url}/v1/models", timeout=1)
-                if response.ok:
-                    return
-                last_error = f"HTTP {response.status_code}"
-            except Exception as error:
-                last_error = str(error)
-            time.sleep(1)
-        raise RuntimeErrorBase(f"Local llama.cpp server did not become ready. Last error: {last_error}")
-
-    def _find_free_port(self) -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
-
-    def _extract_message_content(self, response: dict) -> str:
-        choices = response.get("choices", [])
-        if not choices:
-            raise RuntimeErrorBase("Local Gemma returned an empty response.")
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    parts.append(str(item.get("text", "")))
-                else:
-                    parts.append(str(item))
-            return "".join(parts)
-        return str(content)
+            result = self.pipeline(text=messages, max_new_tokens=LOCAL_GEMMA_MAX_TOKENS, return_full_text=False)
+        except TypeError:
+            result = self.pipeline(messages, max_new_tokens=LOCAL_GEMMA_MAX_TOKENS)
+        return self._extract_generated_text(result)
 
     def set_progress_callback(self, callback: Callable[[str], None] | None) -> None:
         self.progress_callback = callback
-
-    def describe_hardware(self) -> str:
-        gpu_status = get_nvidia_gpu_status()
-        if self._uses_gpu_runtime():
-            backend = "Vulkan" if self._uses_vulkan_runtime() else "CUDA"
-            return f"{gpu_status}; llama.cpp: {backend} GPU runtime, ctx {self.context_size}, offload {self.gpu_layers}/36 слоёв в VRAM"
-        return f"{gpu_status}; llama.cpp: CPU runtime, модель грузится в RAM, VRAM для Gemma не используется"
-
-    def _uses_gpu_runtime(self) -> bool:
-        runtime_path = str(self.server_exe or "").lower()
-        return any(marker in runtime_path for marker in ("cuda", "vulkan", "rocm", "metal"))
-
-    def _uses_vulkan_runtime(self) -> bool:
-        return "vulkan" in str(self.server_exe or "").lower()
-
-    def _gpu_layers_for_mode(self, gpu_mode: str) -> int:
-        safe_layers = self._safe_gpu_layers()
-        if gpu_mode == "off":
-            return 0
-        if gpu_mode in {"max", "auto"}:
-            return safe_layers
-        try:
-            ratio = float(gpu_mode)
-        except ValueError:
-            return safe_layers
-        return max(1, min(safe_layers, round(safe_layers * ratio)))
-
-    def _safe_gpu_layers(self) -> int:
-        if os.environ.get("SWITCH_GEMMA_GPU_LAYERS"):
-            return LOCAL_GEMMA_SAFE_GPU_LAYERS
-        total_vram = get_nvidia_total_memory_mib()
-        if total_vram and total_vram <= 4096:
-            return min(LOCAL_GEMMA_SAFE_GPU_LAYERS, LOCAL_GEMMA_LOW_VRAM_GPU_LAYERS)
-        if total_vram and total_vram <= 6144:
-            return min(LOCAL_GEMMA_SAFE_GPU_LAYERS, 12)
-        return LOCAL_GEMMA_SAFE_GPU_LAYERS
-
-    def _context_size_for_hardware(self) -> int:
-        if os.environ.get("SWITCH_GEMMA_CTX_SIZE"):
-            return LOCAL_GEMMA_CONTEXT_SIZE
-        total_vram = get_nvidia_total_memory_mib()
-        if total_vram and total_vram <= 4096:
-            return min(LOCAL_GEMMA_CONTEXT_SIZE, 4096)
-        return LOCAL_GEMMA_CONTEXT_SIZE
-
-    def _subprocess_environment(self) -> dict[str, str]:
-        environment = os.environ.copy()
-        if self._uses_vulkan_runtime():
-            nvidia_icd = find_nvidia_vulkan_icd()
-            if nvidia_icd:
-                environment["VK_ICD_FILENAMES"] = nvidia_icd
-                environment["GGML_VK_VISIBLE_DEVICES"] = "0"
-        return environment
 
     def _emit_progress(self, message: str) -> None:
         if not self.progress_callback:
@@ -504,6 +273,26 @@ class LocalGemmaRuntime(BaseRuntime):
             self.progress_callback(message)
         except Exception:
             pass
+
+    def _extract_generated_text(self, result) -> str:
+        if isinstance(result, str):
+            return result
+        if isinstance(result, list) and result:
+            return self._extract_generated_text(result[0])
+        if isinstance(result, dict):
+            value = result.get("generated_text") or result.get("text") or result.get("content")
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list) and value:
+                last = value[-1]
+                if isinstance(last, dict):
+                    content = last.get("content")
+                    if isinstance(content, str):
+                        return content
+                    if isinstance(content, list):
+                        return "".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in content)
+                return str(last)
+        return str(result)
 
 
 class OllamaRuntime(BaseRuntime):
@@ -896,9 +685,7 @@ class RuntimeRegistry:
     def __init__(self, project_root: Path | None = None) -> None:
         project_root = project_root or Path.cwd()
         self._runtimes: dict[str, BaseRuntime] = {
-            LocalGemmaRuntime.name: LocalGemmaRuntime(project_root),
-            LMStudioRuntime.name: LMStudioRuntime(),
-            OllamaRuntime.name: OllamaRuntime(),
+            OfficialGemmaRuntime.name: OfficialGemmaRuntime(project_root),
         }
 
     def detect_all_models(self) -> list[RuntimeModel]:

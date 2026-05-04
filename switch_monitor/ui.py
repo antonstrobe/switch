@@ -80,7 +80,7 @@ class SwitchMonitorApp:
             controls,
             textvariable=self.runtime_var,
             state="readonly",
-            values=["auto", "local-gemma", "lmstudio", "ollama"],
+            values=["auto", "official-gemma"],
         )
         self.runtime_box.grid(row=0, column=1, sticky="ew", pady=4)
         self.runtime_box.bind("<<ComboboxSelected>>", lambda _event: self._on_runtime_change())
@@ -172,7 +172,7 @@ class SwitchMonitorApp:
 
     def refresh_models(self) -> None:
         self.log("Ищу Gemma в локальном рантайме, LM Studio и Ollama...")
-        self.models_by_runtime = {"auto": [], "local-gemma": [], "lmstudio": [], "ollama": []}
+        self.models_by_runtime = {"auto": [], "official-gemma": []}
         for model in self.registry.detect_all_models():
             self.models_by_runtime.setdefault(model.runtime, []).append(model)
         self._on_runtime_change()
@@ -206,7 +206,7 @@ class SwitchMonitorApp:
         for model in candidates:
             result = self._benchmark_candidate(model, gpu_mode)
             benchmark_results.append(result)
-            if result["ok"] and model.runtime == "local-gemma":
+            if result["ok"] and model.runtime == "official-gemma":
                 best = result
                 break
             if result["ok"] and (best is None or result["total_seconds"] < best["total_seconds"]):
@@ -240,7 +240,7 @@ class SwitchMonitorApp:
 
     def _auto_candidates(self) -> list[RuntimeModel]:
         candidates: list[RuntimeModel] = []
-        for runtime_name in ("local-gemma", "lmstudio", "ollama"):
+        for runtime_name in ("official-gemma",):
             models = self.models_by_runtime.get(runtime_name, [])
             if not models:
                 continue
@@ -250,7 +250,7 @@ class SwitchMonitorApp:
     def _preferred_auto_model(self, models: list[RuntimeModel]) -> RuntimeModel:
         def score(model: RuntimeModel) -> tuple[int, str]:
             text = f"{model.model_id} {model.display_name}".lower()
-            if model.runtime == "local-gemma":
+            if model.runtime == "official-gemma":
                 return (0, text)
             if "e2b" in text:
                 return (1, text)

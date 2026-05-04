@@ -12,7 +12,7 @@ class DesktopEntryTests(unittest.TestCase):
 
     def test_registry_accepts_project_root(self) -> None:
         registry = RuntimeRegistry()
-        self.assertIsNotNone(registry.get("local-gemma"))
+        self.assertIsNotNone(registry.get("official-gemma"))
 
     def test_desktop_has_model_memory_clear_action(self) -> None:
         self.assertTrue(hasattr(desktop.SwitchDesktopApp, "clear_model_memory"))

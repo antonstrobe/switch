@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-
-from .local_gemma import ensure_llama_cpp_server, ensure_local_gemma_assets
+import kagglehub
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Download the bundled local Gemma model.")
-    parser.add_argument(
-        "--root",
-        type=Path,
-        default=Path.cwd(),
-        help="Project root. Defaults to the current directory.",
-    )
-    args = parser.parse_args(argv)
+def main() -> int:
+    # Download latest version
+    path = kagglehub.competition_download("gemma-4-good-hackathon")
 
-    server_path = ensure_llama_cpp_server(args.root, progress_callback=print)
-    assets = ensure_local_gemma_assets(args.root, progress_callback=print)
-    print(f"Runtime: {server_path}")
-    print(f"Model:  {assets.model_path}")
-    print(f"MMProj: {assets.mmproj_path}")
+    print("Path to competition files:", path)
     return 0
 
 

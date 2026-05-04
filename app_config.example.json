@@ -1,7 +1,7 @@
 {
   "app_mode": "classifier",
-  "runtime": "local-gemma",
-  "model": "Gemma 4 E2B IT Q4_K_M (local GGUF)",
+  "runtime": "official-gemma",
+  "model": "Google Gemma 4 E2B IT (official)",
   "source_mode": "camera",
   "gpu_mode": "max",
   "camera_index": "0",
